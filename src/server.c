@@ -4140,19 +4140,6 @@ void redisSetProcTitle(char *title) {
 }
 
 
-//HSHS1103	- MEMORY MONITOR FUNCTION
-void *memory_logging_function(void *data){
-
-	/* logging for used_memory & memory usage of aofrw buffer */
-	    while(1){
-	        size_t zmalloc_used = zmalloc_used_memory();
-	        size_t size = aofRewriteBufferSize();
-	        serverLog(LL_WARNING, "used_memory : %zu, AOF Rewrite Buffer : %zu", zmalloc_used, size);
-	        sleep(1);
-	    }
-}
-
-
 /*
  * Check whether systemd or upstart have been used to start redis.
  */
@@ -4437,11 +4424,6 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
-
-    //HSHS1103
-    //pthread_t p_thread;
-    //int thr_id, attr;
-    //thr_id = pthread_create(&p_thread, NULL, memory_logging_function, (void *)&attr);
 
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
