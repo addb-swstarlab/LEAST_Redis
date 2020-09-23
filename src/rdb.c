@@ -878,7 +878,8 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
     return 1;
 }
 
-//hshs1103
+/* Each thread undertakes a logging task(RDB) for given different index range
+ * *Generated log record is not duplicated on all Temp PRDB files*/
 int rdbParallelSaveRio(rio *rdb, int *error, int flags, int min_idx, int max_idx,rdbSaveInfo *rsi, int idx) {
     dictIterator *di = NULL;
     dictEntry *de;
@@ -924,7 +925,8 @@ int rdbParallelSaveRio(rio *rdb, int *error, int flags, int min_idx, int max_idx
         if (rdbSaveLen(rdb,db_size) == -1) goto werr;
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
 
-        /* Iterate this DB writing every entry */
+        /* Create an entry by iterating key-value entries
+         * existing in the allocated index range*/
         while((de = dictNextwithIdx(di)) != NULL) {
         	if(di->index >= di->maxindex){
         		break;
@@ -1112,17 +1114,20 @@ werr: /* Write error. */
     return C_ERR;
 }
 
-//hshs1103 -parallel mode
+/* First, Allocate different index ranges for each thread
+ * Next, Create a Temp PRDB file per thread
+ * Then, perform rdbParallelSaveRio function */
 void *parallel_rdbsave_job(void *data){
 
 	char tmpfile[256];
 	FILE *fp;
 	rio rdb;
-	int error; // =0;
+	int error;
 
 	int idx = (int) data;
 	redisDb *db = server.db;
 
+	/* Compare the current hashdict size*/
 	int hash_size = 0;
 	if(db->dict->ht[0].size < db->dict->ht[1].size){
 		hash_size = db->dict->ht[1].size;
@@ -1132,13 +1137,12 @@ void *parallel_rdbsave_job(void *data){
 	}
 
 
-	/*Min/Max Index creation*/
+	/* Assign Min/Max Index */
 	int min_idx, max_idx;
 
 	int quotient = hash_size / server.rdb_pthread;
 	int remainder = hash_size % server.rdb_pthread;
 
-	/*version1*/
 	if(remainder != 0){
 		if(idx == server.rdb_pthread ){
 			min_idx = (idx - 1) * quotient;
@@ -1153,11 +1157,9 @@ void *parallel_rdbsave_job(void *data){
 		min_idx = (idx - 1) * quotient;
 		max_idx = idx * quotient;
 	}
-	//serverLog(LL_VERBOSE, "[TH:%d], min: %d, max: %d", idx, min_idx, max_idx);
 
-	/*tmp rdb file*/
+	/*Create Temp PRDB file*/
 	snprintf(tmpfile, 256, "temp%d.rdb", (int) idx);
-	//snprintf(tmpfile, 256, "temp%d-%d.rdb", (int) idx, (int) getpid());
 	fp = fopen(tmpfile, "w");
 	if (!fp) {
 		serverLog(LL_WARNING, "Failed opening .rdb for saving: %s",
@@ -1166,7 +1168,8 @@ void *parallel_rdbsave_job(void *data){
     }
 
 	rioInitWithFile(&rdb, fp);
-	if (rdbParallelSaveRio(&rdb,&error,RDB_SAVE_NONE,min_idx,max_idx,NULL, idx) == C_ERR) {  //RDB_SAVE_PARALLEL
+	/* Function for each thread to generate and record log records */
+	if (rdbParallelSaveRio(&rdb,&error,RDB_SAVE_NONE,min_idx,max_idx,NULL, idx) == C_ERR) {
 		serverLog(LL_VERBOSE, "rdbParallelSaveRio ERROR");
 		fclose(fp);
 		unlink(tmpfile);
@@ -1296,14 +1299,19 @@ werr:
     return C_ERR;
 }
 
-//hshs1103 - parallel less
+/* Perform RDB creation in parallel
+ * Stored data are partitioned in Temp PRDB files.*/
 int rdbSaveParallelWithoutRename(){
 
     pthread_t p_thread[server.rdb_pthread];
     int thr_id, p_status, m_status;
     int i, j;
     int num =0;
-
+    /* Create Background thread
+     * each thread
+     *    1. has a different thread number & a specified index range
+     *    2. creates Temp PRDB file (includes the corresponding thread number)
+     *    3. performs a logging task for given index range */
     for(i=0; i<server.rdb_pthread; i++){
     	int idx = i+1;
     	if(i != server.rdb_pthread -1){
@@ -1314,11 +1322,15 @@ int rdbSaveParallelWithoutRename(){
     	}
     }
 
+    /* wait until all the threads have completed their job*/
     for(j=0; j<server.rdb_pthread-1; j++){
     	pthread_join(p_thread[j], (void **)&p_status);
     	if(p_status ==0) num++;
 
     }
+
+    /* check the result
+     * If there is a thread that has failed the task, send a failure signal to the parent process*/
     if(num == server.rdb_pthread){
 
     	serverLog(LL_NOTICE, "DB saved on disk(aof_with_parallel_rdb mode)");
@@ -1377,8 +1389,11 @@ werr:
     return C_ERR;
 }
 
-
-
+/*
+ * step 2 - fork child process
+ *   step 2-1 child process - generate Temp PRDBs & write key-value pair log records for current dataset(parallelism)
+ *   step 2-2 parent process - execute client request & append log records in AOF
+  */
 int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
     pid_t childpid;
     long long start;
@@ -1397,12 +1412,16 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         closeListeningSockets(0);
         redisSetProcTitle("redis-rdb-bgsave");
 
-        //hshs1103-withrdb
+
         if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON){
         	if(server.rdb_pthread > 1){
+        		/* LEAST mode*/
+        		/*create snapshot with multi-thread*/
         		retval = rdbSaveParallelWithoutRename();
 
         	} else {
+        		/* LESS mode*/
+        		/*create snapshot with single-thread*/
         		retval = rdbSaveWithoutRename();
         	}
         } else {
@@ -1414,9 +1433,9 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         		retval = rdbSave(filename,rsi);
         	}
         }
+        /* step 3 - Send terminate signal to parent process*/
         if (retval == C_OK) {
             size_t private_dirty = zmalloc_get_private_dirty(-1);
-	    //size_t private_dirty2 = zmalloc_get_private_dirty(-1)/server.rdb_pthread;
             if (private_dirty) {
                 serverLog(LL_NOTICE,
                     "RDB: %zu MB of memory used by copy-on-write",
@@ -1443,26 +1462,24 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
         server.rdb_save_time_start = time(NULL);
         server.rdb_child_pid = childpid;
 
-        //hshs1103
+        //Save the RDB child type
         if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) && (server.rdb_pthread == 1)){
-        	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_RDB;
+        	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_RDB; //LESS child type
         }
         else if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) && (server.rdb_pthread > 1)) {
-        	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB;
+        	server.rdb_child_type = RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB; //LEAST child type
         }
         else if((server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_OFF) && (server.rdb_pthread > 1)) {
-        	server.rdb_child_type = RDB_CHILD_TYPE_PARALLEL_RDB;
+        	server.rdb_child_type = RDB_CHILD_TYPE_PARALLEL_RDB; //PRDB child type
         }
         else {
-        	server.rdb_child_type = RDB_CHILD_TYPE_DISK;
+        	server.rdb_child_type = RDB_CHILD_TYPE_DISK; //RDB child type
         }
 
-
-        //server.rdb_child_type = RDB_CHILD_TYPE_DISK;
         updateDictResizePolicy();
         return C_OK;
     }
-    return C_OK; /* unreached */
+    return C_OK;
 }
 
 //hshs1103 - p mode
@@ -2276,7 +2293,6 @@ void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
     updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
 }
 
-//hshs1103 - parallel donehandler
 void ParallelbackgroundSaveDoneHandlerDisk(int exitcode, int bysignal){
     if (!bysignal && exitcode == 0) {
         serverLog(LL_NOTICE,
@@ -2419,13 +2435,14 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     case RDB_CHILD_TYPE_SOCKET:
         backgroundSaveDoneHandlerSocket(exitcode,bysignal);
         break;
-        //hshs1103
     case RDB_CHILD_TYPE_AOF_WITH_RDB:
     	aof_with_rdb_DoneHandler(exitcode, bysignal);
     	break;
     case RDB_CHILD_TYPE_PARALLEL_RDB:
     	ParallelbackgroundSaveDoneHandlerDisk(exitcode, bysignal);
     	break;
+    	/* step 4 - Rename Temp AOF to AOF & Remove old AOF
+    	 * step 5 - Rename all Temp PRDBs to PRDBs*/
     case RDB_CHILD_TYPE_AOF_WITH_PARALLEL_RDB:
     	aof_with_parallel_rdb_DoneHandler(exitcode, bysignal);
     	break;

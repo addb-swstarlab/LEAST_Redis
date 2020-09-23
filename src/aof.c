@@ -1773,7 +1773,6 @@ void aof_with_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File C
 }
 
 
-//hshs1103 p mode
 void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create RDB File Complete
 
     if (!bysignal && exitcode == 0) {
@@ -1808,12 +1807,13 @@ void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create R
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
 
+    /* step 4 - Rename Temp AOF to AOF & Remove old AOF */
     if (rename(REDIS_DEFAULT_TEMP_AOF_FILENAME,server.aof_filename) == -1) { // rename temp aof
     	serverLog(LL_WARNING,
             "Error trying to rename the temporary AOF file: %s", strerror(errno));
         exit(1);
     }
-
+    /* step 5 - Rename all Temp PRDBs to PRDBs*/
     rdbRenameAllTempFile(server.rdb_pthread);
 
     server.aof_selected_db = -1;
@@ -1825,11 +1825,23 @@ void aof_with_parallel_rdb_DoneHandler(int exitcode, int bysignal) { // Create R
         server.aof_state = AOF_ON;
 
 }
+
+/*LEAST method operation process
+ * step 1 - create Temp AOF & change file descriptor
+ * step 2 - fork child process
+ *   step 2-1 child process - generate Temp PRDBs & write key-value pair log records for current dataset(parallelism)
+ *   step 2-2 parent process - execute client request & append log records in AOF
+ * step 3 - When the child process is finished, the child process is terminated
+ * step 4 - Rename Temp AOF to AOF & Remove old AOF
+ * step 5 - Rename all Temp PRDBs to PRDBs
+ * */
 void aof_with_rdb() {
 	serverLog(LL_NOTICE, "AOF_with_RDB logging start");
     FILE *fp;
     int ret;
 
+    /*step 1*/
+    /* Create Temp AOF */
     if((fp = fopen(REDIS_DEFAULT_TEMP_AOF_FILENAME,"w")) == NULL) {
     	serverLog(LL_WARNING, "Error open to the temporary AOF file : %s", strerror(errno));
         return;
@@ -1839,10 +1851,12 @@ void aof_with_rdb() {
     	serverLog(LL_WARNING, "Error Append Select DB Command");
         exit(1);
     }
+    /* Change Temp AOF to Current AOF */
+    server.aof_fd = fileno(fp);
 
-    server.aof_fd = fileno(fp); // Change Temp AOF to Current AOF
-
-    if(rdbSaveBackground(REDIS_DEFAULT_TEMP_RDB_FILENAME, NULL) == C_OK)  // Create Temp RDB File(Background Process)
+    /*step 2*/
+    /* fork child process - Create Temp PRDB Files(Background Process in parallel) */
+    if(rdbSaveBackground(REDIS_DEFAULT_TEMP_RDB_FILENAME, NULL) == C_OK)
     	serverLog(LL_NOTICE, "Background saving started(AOF With RDB Mode)");
 
 }
