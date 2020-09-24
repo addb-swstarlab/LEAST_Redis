@@ -3588,29 +3588,44 @@ int checkForSentinelMode(int argc, char **argv) {
 
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
-	//hshs1103
+	/*LEAST Data Recovery*/
 	if(server.aof_with_rdb_state == REDIS_AOF_WITH_RDB_ON) {
 		if(server.rdb_pthread > 1){
 			serverLog(LL_WARNING, "aof_with_parallel_rdb on");
+			/* Count the number of PRDB files and Temp PRDB files*/
 			int dump_cnt = get_dumpfile_cnt();
 			int temp_cnt = get_tempfile_cnt();
+			/* System crash occurs before LEAST is first triggered */
 			if( dump_cnt == 0 && temp_cnt ==0){
 				loadData_aof_with_parallel_rdb();
 				return;
-			} else if ( dump_cnt ==0 || temp_cnt ==0) {
+			}
+			/* LEAST was first triggered, and then system crash occurred before the operation was completed
+			 * Or system crash occurs after LEAST operation completes */
+			else if ( dump_cnt ==0 || temp_cnt ==0) {
 				loadData_aof_with_parallel_rdb();
 				return;
-			} else if ( (dump_cnt ==  temp_cnt) && (dump_cnt == server.rdb_pthread) && (temp_cnt == server.rdb_pthread)) {
+			}
+			/* System crash occurs during Temp PRDB creation or during Temp PRDB rename(error occurred while renaming only half of all Temp PRDB files) */
+			else if ( (dump_cnt ==  temp_cnt) && (dump_cnt == server.rdb_pthread) && (temp_cnt == server.rdb_pthread)) {
 				loadData_aof_with_parallel_rdb();
 				return;
-			} else {
+			}
+			else {
+				/* System crash occurred before the first LEAST operation ended(renaming)
+				 * A situation in which the sum of Temp PRDB files and PRDB files equals the number of threads.*/
 				if((dump_cnt + temp_cnt) == server.rdb_pthread) {
 					serverLog(LL_WARNING, "The system shut down before the first LEAST operation ended");
 					__loadData_aof_with_parallel_rdb();
-				} else if ((dump_cnt + temp_cnt) > server.rdb_pthread) {
+				}
+				/* System crash occurred after the first LEAST operation ended(renaming)
+				 * A situation in which the sum of Temp PRDB files and PRDB files exceeds the number of threads.*/
+				else if ((dump_cnt + temp_cnt) > server.rdb_pthread) {
 					serverLog(LL_WARNING, "The system shut down after the first LEAST operation ended");
 					_loadData_aof_with_parallel_rdb();
-				} else {
+				}
+				/* Exception case */
+				else {
 					serverLog(LL_WARNING,"Fatal error loading the DB. Please check the status of log files and redis configuration(parallel_rdb_thread).");
 					exit(1);
 				}
