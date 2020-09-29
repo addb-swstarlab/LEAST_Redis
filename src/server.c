@@ -4048,6 +4048,7 @@ else if (aof && temp_aof && rdb && temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
 else if (aof && !temp_aof && rdb && temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(3, NULL) == C_OK) {
@@ -4156,7 +4157,7 @@ else if (aof && temp_aof && rdb && temp_rdb) {
 }
 
 /* Exception situation during initial trigger operation- crash occurred during PRDB rename
- * list of files - AOF, Temp RDB, PRDB(renamed + not renamed)
+ * list of files - AOF, Temp RDB, PRDB(renamed)
  * Recovery order - PRDB(renamed), Temp PRDB, AOF */
 else if (aof && !temp_aof && rdb && temp_rdb) {
     start = ustime();
