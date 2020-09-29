@@ -3812,7 +3812,12 @@ else {
 serverLog(LL_WARNING, "recovery complete (aof_with_rdb mode)");
 }
 
-//hshs1103 p mode
+
+/* LESS Data Recovery Function
+ * Step 1. Check the types and number of log files on disk --> Identify when the system crash occurred
+ * Step 2. Perform data recovery according to the types of files present on the disk
+ * */
+
 void loadData_aof_with_parallel_rdb(void) {
 long long start = ustime();
 bool temp_aof = false, temp_rdb = false, aof = false, rdb = false;
@@ -3823,7 +3828,10 @@ if (access(server.aof_filename, F_OK) == 0) aof = true;
 if (checkdumpfile(server.rdb_pthread) == 0) rdb =true;
 
 
-
+/* LEAST Data Recovery case - initial triggered case */
+/* case 1 - crash occurred before LEAST is triggered
+ * list of files - AOF
+ * Recovery order - AOF */
 
 if (aof && !temp_aof && !rdb && !temp_rdb) {
     start = ustime();
@@ -3831,6 +3839,11 @@ if (aof && !temp_aof && !rdb && !temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+
+/* case 2 - crash occurred before starting PRDB creation
+ * list of files - AOF, Temp AOF
+ * Recovery order - AOF, Temp AOF */
 else if (aof && temp_aof && !rdb && !temp_rdb) {
     start = ustime();
     if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
@@ -3841,6 +3854,10 @@ else if (aof && temp_aof && !rdb && !temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+/* case 3 - crash occurred during PRDB creation
+ * list of files - AOF, Temp AOF, Temp PRDB
+ * Recovery order - AOF, Temp AOF */
 else if (aof && temp_aof && !rdb && temp_rdb) {
     start = ustime();
     if (loadAppendOnlyFile(server.aof_filename) == C_OK) {
@@ -3851,6 +3868,10 @@ else if (aof && temp_aof && !rdb && temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+/* case 4 - crash occurred after Temp AOF rename
+ * list of files - AOF, Temp PRDB
+ * Recovery order - Temp PRDB, AOF */
 else if (aof && !temp_aof && !rdb && temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(0, NULL) == C_OK) {
@@ -3862,6 +3883,11 @@ else if (aof && !temp_aof && !rdb && temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+/* LEAST Data Recovery case - from the second trigger */
+/* case 1 - crash occurred before LEAST operates or After Temp PRDB rename
+ * list of files - AOF, PRDB
+ * Recovery order - PRDB, AOF */
 else if (aof && !temp_aof && rdb && !temp_rdb){
     start = ustime();
     if (Parallel_rdbLoad(1, NULL) == C_OK) {
@@ -3872,6 +3898,10 @@ else if (aof && !temp_aof && rdb && !temp_rdb){
     if (loadAppendOnlyFile(server.aof_filename) == C_OK)
         serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
 }
+
+/* case 2 - crash occurred before starting PRDB creation
+ * list of files - AOF, Temp AOF, PRDB
+ * Recovery order - PRDB, AOF, Temp AOF */
 else if (aof && temp_aof && rdb && !temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(1, NULL) == C_OK) {
@@ -3887,6 +3917,10 @@ else if (aof && temp_aof && rdb && !temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+/* case 3 - crash occurred during PRDB creation
+ * list of files - AOF, Temp AOF, PRDB, Temp PRDB
+ * Recovery order - PRDB, AOF, Temp AOF */
 else if (aof && temp_aof && rdb && temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(1, NULL) == C_OK) {
@@ -3902,6 +3936,10 @@ else if (aof && temp_aof && rdb && temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from temp append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+
+/* case 4 - crash occurred after Temp AOF rename
+ * list of files - AOF, PRDB, Temp PRDB
+ * Recovery order - Temp PRDB, AOF*/
 else if (aof && !temp_aof && rdb && temp_rdb) {
     start = ustime();
     if (Parallel_rdbLoad(0, NULL) == C_OK) {
@@ -3913,6 +3951,8 @@ else if (aof && !temp_aof && rdb && temp_rdb) {
     	serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     }
 }
+/* exception case
+ * Situations where data recovery cannot be performed */
 else {
 	serverLog(LL_WARNING, "File is not existed");
 }
