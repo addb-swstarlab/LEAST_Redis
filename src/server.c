@@ -3884,7 +3884,7 @@ else if (aof && !temp_aof && !rdb && temp_rdb) {
     }
 }
 
-/* LEAST Data Recovery case - from the second trigger */
+/* LEAST Data Recovery case - from the second triggered case */
 /* case 1 - crash occurred before LEAST operates or After Temp PRDB rename
  * list of files - AOF, PRDB
  * Recovery order - PRDB, AOF */
